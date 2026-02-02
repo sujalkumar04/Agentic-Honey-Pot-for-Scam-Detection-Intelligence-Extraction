@@ -46,15 +46,23 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 @app.get("/")
+@app.head("/")
 async def root():
     """Health check endpoint."""
     return {"status": "ok", "message": "Agentic Honeypot API is running"}
 
 
 @app.get("/health")
+@app.head("/health")
 async def health():
     """Health check endpoint."""
     return {"status": "healthy"}
+
+
+@app.head("/honeypot")
+async def honeypot_head():
+    """HEAD check for honeypot endpoint."""
+    return {"status": "ok"}
 
 
 def verify_api_key(x_api_key: str = Header(...)) -> str:
