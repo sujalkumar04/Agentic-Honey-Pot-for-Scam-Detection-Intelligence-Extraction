@@ -45,7 +45,19 @@ from extractor import extract_intel
 from callback import send_callback
 from scam_classifier import classify_scam
 
-app = FastAPI()
+app = FastAPI(title="Agentic Honeypot API", version="1.0.0")
+
+
+@app.get("/")
+async def root():
+    """Health check endpoint."""
+    return {"status": "ok", "message": "Agentic Honeypot API is running"}
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "healthy"}
 
 
 def verify_api_key(x_api_key: str = Header(...)) -> str:
