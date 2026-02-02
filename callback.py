@@ -1,5 +1,5 @@
 """
-Callback module for reporting scam intelligence to external API.
+Callback module for reporting scam intelligence to GUVI evaluation endpoint.
 """
 
 import requests
@@ -11,7 +11,7 @@ TIMEOUT = 5
 
 def send_callback(session_id: str, session: dict[str, Any]) -> bool:
     """
-    Send scam intelligence report to external callback API.
+    Send scam intelligence report to GUVI evaluation endpoint.
 
     Posts session data including scam detection results, extracted intelligence,
     and agent notes to the hackathon reporting endpoint.
@@ -24,12 +24,22 @@ def send_callback(session_id: str, session: dict[str, Any]) -> bool:
     Returns:
         True if callback succeeded (HTTP 200), False otherwise.
     """
+    intel = session.get("intelligence", {})
+    
+    # Convert snake_case to camelCase for hackathon spec compliance
+    extracted_intelligence = {
+        "bankAccounts": intel.get("bank_accounts", []),
+        "upiIds": intel.get("upi_ids", []),
+        "phishingLinks": intel.get("urls", []),
+        "phoneNumbers": intel.get("phone_numbers", []),
+        "suspiciousKeywords": intel.get("suspicious_keywords", [])
+    }
+
     payload = {
         "sessionId": session_id,
         "scamDetected": session.get("scamDetected", False),
-        "scamType": session.get("scamType", "UNKNOWN"),
         "totalMessagesExchanged": len(session.get("messages", [])),
-        "extractedIntelligence": session.get("intelligence", {}),
+        "extractedIntelligence": extracted_intelligence,
         "agentNotes": _generate_notes(session),
     }
 
@@ -73,7 +83,9 @@ def _generate_notes(session: dict[str, Any]) -> str:
     if intel.get("bank_accounts"):
         notes.append(f"Bank accounts: {', '.join(intel['bank_accounts'])}")
     if intel.get("urls"):
-        notes.append(f"URLs: {', '.join(intel['urls'])}")
+        notes.append(f"Phishing links: {', '.join(intel['urls'])}")
+    if intel.get("suspicious_keywords"):
+        notes.append(f"Keywords: {', '.join(intel['suspicious_keywords'][:5])}")
     
     msg_count = len(session.get("messages", []))
     notes.append(f"Total messages: {msg_count}")
@@ -94,7 +106,6 @@ def _get_scam_details(scam_type: str, intel: dict[str, Any]) -> str:
     """
     upi_ids = intel.get("upi_ids", [])
     urls = intel.get("urls", [])
-    phone_numbers = intel.get("phone_numbers", [])
     
     if scam_type == "UPI_PAYMENT_SCAM" and upi_ids:
         return f"Scammer requested transfer to {upi_ids[0]}"
@@ -109,4 +120,4 @@ def _get_scam_details(scam_type: str, intel: dict[str, Any]) -> str:
     elif scam_type == "LOTTERY_SCAM":
         return "Scammer claimed victim won lottery/prize"
     else:
-        return "Scammer used urgency and social engineering"
+        return "Scammer used urgency and social engineering tactics"
