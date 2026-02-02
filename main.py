@@ -42,6 +42,56 @@ async def root():
     return {"status": "ok", "message": "Agentic Honeypot API is running"}
 
 
+# Also accept POST at root for tester compatibility
+@app.post("/")
+async def root_post(request: Request):
+    """Redirect POST at root to honeypot logic."""
+    # Check API key
+    api_key = request.headers.get("x-api-key")
+    if not api_key:
+        return JSONResponse(status_code=401, content={"status": "error", "detail": "x-api-key required"})
+    
+    try:
+        body = await request.json()
+    except:
+        return JSONResponse(status_code=400, content={"status": "error", "detail": "Invalid JSON"})
+    
+    # Extract session ID
+    session_id = body.get("sessionId") or body.get("session_id") or str(uuid.uuid4())
+    
+    # Extract message text
+    message = body.get("message", {})
+    if isinstance(message, str):
+        user_message = message
+    elif isinstance(message, dict):
+        user_message = message.get("text") or message.get("content") or ""
+    else:
+        user_message = str(message) if message else ""
+    
+    if not user_message:
+        return JSONResponse(status_code=400, content={"status": "error", "detail": "No message text"})
+    
+    # Process
+    session = load_session(session_id)
+    append_message(session_id, "user", user_message)
+    session = load_session(session_id)
+    
+    session["intelligence"] = extract_intel(user_message, session.get("intelligence", {}))
+    scam_detected = detect_scam(session["messages"])
+    session["scamDetected"] = scam_detected
+    
+    reply = generate_reply(
+        history=session["messages"],
+        latest_message=user_message,
+        scam_detected=scam_detected
+    )
+    
+    append_message(session_id, "assistant", reply)
+    save_session(session_id, session)
+    
+    return JSONResponse(content={"status": "success", "reply": reply})
+
+
 @app.get("/health")
 @app.head("/health")
 async def health():
