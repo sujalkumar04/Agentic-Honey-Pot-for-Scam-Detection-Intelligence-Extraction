@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI, Header, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from memory import load_session, save_session, append_message
 from detector import detect_scam
@@ -49,69 +49,150 @@ app = FastAPI()
 
 
 def verify_api_key(x_api_key: str = Header(...)) -> str:
+    """Verify API key from request header."""
     api_key = os.getenv("API_KEY")
     if not api_key or x_api_key != api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return x_api_key
 
 
+# ============================================================================
+# Request/Response Models (Hackathon Spec Compliant)
+# ============================================================================
+
 class MessageBody(BaseModel):
+    """Incoming message structure."""
     sender: str
     text: str
-    timestamp: str
+    timestamp: Union[int, str]  # Accept both numeric epoch and string
+
+    class Config:
+        extra = "allow"
+
+
+class HistoryMessage(BaseModel):
+    """Conversation history message structure."""
+    sender: str
+    text: str
+    timestamp: Union[int, str]
+
+    class Config:
+        extra = "allow"
+
+
+class Metadata(BaseModel):
+    """Optional metadata about the conversation."""
+    channel: Optional[str] = None  # SMS / WhatsApp / Email / Chat
+    language: Optional[str] = None
+    locale: Optional[str] = None
 
     class Config:
         extra = "allow"
 
 
 class HoneypotRequest(BaseModel):
+    """
+    Honeypot API request body.
+    
+    Matches hackathon specification:
+    - sessionId: Unique conversation identifier
+    - message: Current incoming message
+    - conversationHistory: Previous messages (optional, empty [] for first)
+    - metadata: Channel/language info (optional)
+    """
     sessionId: str
     message: MessageBody
+    conversationHistory: Optional[list[HistoryMessage]] = []
+    metadata: Optional[Metadata] = None
 
     class Config:
         extra = "allow"
 
 
 class HoneypotResponse(BaseModel):
+    """
+    Honeypot API response body.
+    
+    Format: {"status": "success", "reply": "..."}
+    """
     status: str
     reply: str
 
+
+# ============================================================================
+# Main Endpoint
+# ============================================================================
 
 @app.post("/honeypot", response_model=HoneypotResponse)
 async def honeypot(
     request: HoneypotRequest,
     api_key: str = Depends(verify_api_key)
 ) -> HoneypotResponse:
+    """
+    Process incoming scam message and generate response.
+    
+    Flow:
+    1. Load/create session
+    2. Incorporate conversation history if provided
+    3. Add new message to session
+    4. Extract intelligence (Groq + regex)
+    5. Detect and classify scam
+    6. Generate persona-based reply
+    7. Trigger callback if thresholds met
+    """
     session_id = request.sessionId
     user_message = request.message.text
 
+    # Load or create session
     session = load_session(session_id)
 
+    # Incorporate conversation history if provided (for multi-turn support)
+    if request.conversationHistory:
+        _sync_conversation_history(session_id, request.conversationHistory)
+        session = load_session(session_id)
+
+    # Add current message
     append_message(session_id, "user", user_message)
     session = load_session(session_id)
 
+    # Extract intelligence from user message
     session["intelligence"] = extract_intel(user_message, session.get("intelligence", {}))
 
+    # Detect scam
     scam_detected = detect_scam(session["messages"])
     session["scamDetected"] = scam_detected
 
+    # Classify scam type
     conversation_text = " ".join([m.get("content", "") for m in session["messages"]])
     scam_type = classify_scam(conversation_text)
     session["scamType"] = scam_type
 
+    # Store metadata if provided
+    if request.metadata:
+        session["metadata"] = {
+            "channel": request.metadata.channel,
+            "language": request.metadata.language,
+            "locale": request.metadata.locale
+        }
+
+    # Generate reply
     reply = generate_reply(
         history=session["messages"],
         latest_message=user_message,
         scam_detected=scam_detected
     )
 
+    # Add reply to session
     append_message(session_id, "assistant", reply)
     session = load_session(session_id)
 
+    # Extract intel from reply (in case agent mentions extractable data)
     session["intelligence"] = extract_intel(reply, session.get("intelligence", {}))
 
+    # Save session
     save_session(session_id, session)
 
+    # Check if callback should be triggered
     should_callback = (
         len(session["messages"]) >= 10 or
         _has_significant_intel(session.get("intelligence", {}))
@@ -125,7 +206,27 @@ async def honeypot(
     return HoneypotResponse(status="success", reply=reply)
 
 
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def _sync_conversation_history(session_id: str, history: list[HistoryMessage]) -> None:
+    """
+    Sync provided conversation history with session memory.
+    
+    Adds any messages from conversationHistory that aren't already in session.
+    """
+    session = load_session(session_id)
+    existing_contents = {m.get("content", "") for m in session.get("messages", [])}
+
+    for msg in history:
+        if msg.text not in existing_contents:
+            role = "user" if msg.sender in ["scammer", "user"] else "assistant"
+            append_message(session_id, role, msg.text)
+
+
 def _has_significant_intel(intelligence: dict[str, Any]) -> bool:
+    """Check if extracted intelligence contains actionable data."""
     significant_keys = ["bank_accounts", "upi_ids", "urls", "phone_numbers"]
     return any(intelligence.get(key) for key in significant_keys)
 
