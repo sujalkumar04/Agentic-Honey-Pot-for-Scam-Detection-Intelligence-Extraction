@@ -22,7 +22,18 @@ from extractor import extract_intel
 from callback import send_callback
 from scam_classifier import classify_scam
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="Agentic Honeypot API", version="1.0.0")
+
+# Add CORS middleware for hackathon tester compatibility
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Custom exception handler for validation errors
