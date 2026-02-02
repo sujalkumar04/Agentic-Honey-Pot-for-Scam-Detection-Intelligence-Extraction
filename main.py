@@ -64,7 +64,7 @@ class MessageBody(BaseModel):
     """Incoming message structure."""
     sender: str
     text: str
-    timestamp: Union[int, str]  # Accept both numeric epoch and string
+    timestamp: Optional[Union[int, str, float]] = None  # Optional, accept any format
 
     class Config:
         extra = "allow"
@@ -74,7 +74,7 @@ class HistoryMessage(BaseModel):
     """Conversation history message structure."""
     sender: str
     text: str
-    timestamp: Union[int, str]
+    timestamp: Optional[Union[int, str, float]] = None
 
     class Config:
         extra = "allow"
@@ -82,7 +82,7 @@ class HistoryMessage(BaseModel):
 
 class Metadata(BaseModel):
     """Optional metadata about the conversation."""
-    channel: Optional[str] = None  # SMS / WhatsApp / Email / Chat
+    channel: Optional[str] = None
     language: Optional[str] = None
     locale: Optional[str] = None
 
@@ -97,12 +97,12 @@ class HoneypotRequest(BaseModel):
     Matches hackathon specification:
     - sessionId: Unique conversation identifier
     - message: Current incoming message
-    - conversationHistory: Previous messages (optional, empty [] for first)
+    - conversationHistory: Previous messages (optional)
     - metadata: Channel/language info (optional)
     """
     sessionId: str
     message: MessageBody
-    conversationHistory: Optional[list[HistoryMessage]] = []
+    conversationHistory: Optional[list[HistoryMessage]] = None
     metadata: Optional[Metadata] = None
 
     class Config:
