@@ -6,6 +6,7 @@ POST /honeypot - Main API endpoint per Problem Statement
 """
 
 import os
+import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -62,7 +63,7 @@ class Metadata(BaseModel):
 
 
 class HoneypotRequest(BaseModel):
-    sessionId: str
+    sessionId: Optional[str] = None
     message: Message
     conversationHistory: Optional[List[HistoryMessage]] = []
     metadata: Optional[Metadata] = None
@@ -84,7 +85,7 @@ async def honeypot(
     Process scam message and return AI agent response.
     Per Problem Statement sections 6, 7, 8.
     """
-    session_id = request.sessionId
+    session_id = request.sessionId or str(uuid.uuid4())
     user_message = request.message.text
 
     # Load session
