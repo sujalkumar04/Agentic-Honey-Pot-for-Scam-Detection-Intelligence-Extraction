@@ -7,11 +7,12 @@ POST /honeypot - Main API endpoint per Problem Statement
 
 import os
 import uuid
+import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -34,11 +35,46 @@ app.add_middleware(
 )
 
 
+def process_background_tasks(session_id: str, user_message: str):
+    """
+    Handle heavy AI tasks in background to ensure fast API response.
+    Process: Extract Intelligence -> Classify Scam -> Send Callback
+    """
+    try:
+        session = load_session(session_id)
+        
+        # 1. Extract Intelligence (Groq LLM)
+        session["intelligence"] = extract_intel(user_message, session.get("intelligence", {}))
+        
+        # 2. Classify Scam Type (Groq LLM)
+        conversation_text = " ".join([m.get("content", "") for m in session["messages"]])
+        session["scamType"] = classify_scam(conversation_text)
+        
+        # Save updates
+        save_session(session_id, session)
+        
+        # 3. Check & Send Callback
+        should_callback = (
+            len(session["messages"]) >= 10 or
+            any(session.get("intelligence", {}).get(k) for k in ["bank_accounts", "upi_ids", "urls", "phone_numbers"])
+        )
+        
+        if should_callback and not session.get("callbackSent", False):
+            success = send_callback(session_id, session)
+            if success:
+                session["callbackSent"] = True
+                save_session(session_id, session)
+                
+    except Exception as e:
+        print(f"Background task error: {e}")
+        traceback.print_exc()
+
+
 @app.post("/honeypot")
-async def honeypot(request: Request):
+async def honeypot(request: Request, background_tasks: BackgroundTasks):
     """
     Process scam message and return AI agent response.
-    Accepts any JSON format for maximum compatibility.
+    Optimized for <3s response time by moving LLM calls to background.
     """
     # Check API key
     api_key = request.headers.get("x-api-key")
@@ -51,7 +87,10 @@ async def honeypot(request: Request):
     # Parse JSON body
     try:
         body = await request.json()
-    except Exception:
+        print(f"DEBUG: Received Headers: {request.headers}")
+        print(f"DEBUG: Received Body: {body}")
+    except Exception as e:
+        print(f"DEBUG: JSON Parse Error: {e}")
         return JSONResponse(
             status_code=400,
             content={"status": "error", "reply": "Invalid JSON body"}
@@ -94,19 +133,11 @@ async def honeypot(request: Request):
     append_message(session_id, "user", user_message)
     session = load_session(session_id)
     
-    # Extract intelligence
-    session["intelligence"] = extract_intel(user_message, session.get("intelligence", {}))
-    
-    # Detect scam
+    # Detect scam (Fast local regex)
     scam_detected = detect_scam(session["messages"])
     session["scamDetected"] = scam_detected
     
-    # Classify scam type
-    conversation_text = " ".join([m.get("content", "") for m in session["messages"]])
-    scam_type = classify_scam(conversation_text)
-    session["scamType"] = scam_type
-    
-    # Generate AI agent reply
+    # Generate AI agent reply (Fast template selection)
     reply = generate_reply(
         history=session["messages"],
         latest_message=user_message,
@@ -115,23 +146,13 @@ async def honeypot(request: Request):
     
     # Add reply to session
     append_message(session_id, "assistant", reply)
-    session = load_session(session_id)
-    
-    # Save session
+    # Save session with messages
     save_session(session_id, session)
     
-    # Send callback per PS section 12 when thresholds met
-    should_callback = (
-        len(session["messages"]) >= 10 or
-        any(session.get("intelligence", {}).get(k) for k in ["bank_accounts", "upi_ids", "urls", "phone_numbers"])
-    )
+    # Add heavy tasks to background to prevent timeout
+    background_tasks.add_task(process_background_tasks, session_id, user_message)
     
-    if should_callback and not session.get("callbackSent", False):
-        send_callback(session_id, session)
-        session["callbackSent"] = True
-        save_session(session_id, session)
-    
-    # Return response per PS section 8
+    # Return response immediately
     return JSONResponse(content={"status": "success", "reply": reply})
 
 
